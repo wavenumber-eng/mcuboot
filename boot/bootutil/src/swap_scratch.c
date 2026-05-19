@@ -25,6 +25,7 @@
 #include "bootutil_priv.h"
 #include "swap_priv.h"
 #include "bootutil/bootutil_log.h"
+#include "bootutil/mcuboot_status.h"
 
 #include "mcuboot_config/mcuboot_config.h"
 
@@ -664,6 +665,23 @@ find_swap_count(const struct boot_loader_state *state, uint32_t copy_size)
     return swap_count;
 }
 
+static void
+boot_swap_progress(struct boot_loader_state *state,
+                   mcuboot_status_progress_operation_t operation,
+                   const char *message, uint32_t current, uint32_t total)
+{
+    struct mcuboot_status_progress progress = {
+        .status = MCUBOOT_STATUS_UPGRADING,
+        .operation = operation,
+        .image_index = BOOT_CURR_IMG(state),
+        .current = current,
+        .total = total,
+        .message = message,
+    };
+
+    mcuboot_status_progress(&progress);
+}
+
 /**
  * Swaps the contents of two flash regions within the two image slots.
  *
@@ -677,7 +695,8 @@ find_swap_count(const struct boot_loader_state *state, uint32_t copy_size)
  */
 static void
 boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
-        struct boot_status *bs)
+        struct boot_status *bs, uint32_t progress_current,
+        uint32_t progress_total)
 {
     const struct flash_area *fap_primary_slot;
     const struct flash_area *fap_secondary_slot;
@@ -746,6 +765,9 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
     bs->use_scratch = (bs->idx == BOOT_STATUS_IDX_0 && copy_sz != sz);
 
     if (bs->state == BOOT_STATUS_STATE_0) {
+        boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                           "ERASING SCRATCH", progress_current,
+                           progress_total);
         BOOT_LOG_DBG("erasing scratch area");
         rc = boot_erase_region(fap_scratch, 0, flash_area_get_size(fap_scratch), false);
         assert(rc == 0);
@@ -776,6 +798,9 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
             }
         }
 
+        boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                           "COPYING UPDATE", progress_current,
+                           progress_total);
         rc = boot_copy_region(state, fap_secondary_slot, fap_scratch,
                               img_off, 0, copy_sz);
         assert(rc == 0);
@@ -813,10 +838,16 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
         }
 
         if (erase_sz > 0) {
+            boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                               "ERASING SECONDARY", progress_current,
+                               progress_total);
             rc = boot_erase_region(fap_secondary_slot, img_off, erase_sz, false);
             assert(rc == 0);
         }
 
+        boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                           "COPYING BACKUP", progress_current,
+                           progress_total);
         rc = boot_copy_region(state, fap_primary_slot, fap_secondary_slot,
                               img_off, img_off, copy_sz);
         assert(rc == 0);
@@ -846,6 +877,9 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
         }
 
         if (erase_sz > 0) {
+            boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                               "ERASING PRIMARY", progress_current,
+                               progress_total);
             rc = boot_erase_region(fap_primary_slot, img_off, erase_sz, false);
             assert(rc == 0);
         }
@@ -853,6 +887,9 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
         /* NOTE: If this is the final sector, we exclude the image trailer from
          * this copy (copy_sz was truncated earlier).
          */
+        boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                           "WRITING PRIMARY", progress_current,
+                           progress_total);
         rc = boot_copy_region(state, fap_scratch, fap_primary_slot,
                               0, img_off, copy_sz);
         assert(rc == 0);
@@ -903,6 +940,10 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_loader_state *state,
         bs->state = BOOT_STATUS_STATE_0;
         BOOT_STATUS_ASSERT(rc == 0);
 
+        boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_SWAP,
+                           "WRITING FIRMWARE", progress_current + 1,
+                           progress_total);
+
         if (erase_scratch) {
            /* Scratch trailers MUST be erased backwards, this is to avoid an issue whereby a
             * device reboots in the process of erasing the scratch if it erased forwards, if that
@@ -923,22 +964,36 @@ swap_run(struct boot_loader_state *state, struct boot_status *bs,
     int first_sector_idx;
     int last_sector_idx;
     uint32_t swap_idx;
+    uint32_t swap_count;
+    uint32_t completed;
 
     BOOT_LOG_INF("Starting swap using scratch algorithm.");
 
     last_sector_idx = find_last_sector_idx(state, copy_size);
+    swap_count = find_swap_count(state, copy_size);
+    completed = bs->idx > BOOT_STATUS_IDX_0 ?
+                bs->idx - BOOT_STATUS_IDX_0 : 0;
+    if (completed > swap_count) {
+        completed = swap_count;
+    }
+
+    boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_PREPARE,
+                       "PREPARING UPDATE", completed, swap_count);
 
     swap_idx = 0;
     while (last_sector_idx >= 0) {
         sz = boot_copy_sz(state, last_sector_idx, &first_sector_idx);
         if (swap_idx >= (bs->idx - BOOT_STATUS_IDX_0)) {
-            boot_swap_sectors(first_sector_idx, sz, state, bs);
+            boot_swap_sectors(first_sector_idx, sz, state, bs, swap_idx,
+                              swap_count);
         }
 
         last_sector_idx = first_sector_idx - 1;
         swap_idx++;
     }
 
+    boot_swap_progress(state, MCUBOOT_STATUS_PROGRESS_DONE,
+                       "UPDATE WRITTEN", swap_count, swap_count);
 }
 #endif /* !MCUBOOT_OVERWRITE_ONLY */
 
