@@ -32,6 +32,7 @@
 
 #include "bootutil/crypto/sha.h"
 #include "bootutil/image.h"
+#include "bootutil/mcuboot_status.h"
 #include "bootutil_priv.h"
 #include "mcuboot_config/mcuboot_config.h"
 #include "bootutil/bootutil_log.h"
@@ -39,6 +40,28 @@
 BOOT_LOG_MODULE_DECLARE(mcuboot);
 
 #ifndef MCUBOOT_SIGN_PURE
+static void
+bootutil_img_hash_progress(const struct image_header *hdr, uint32_t current,
+                           uint32_t total)
+{
+    struct mcuboot_status_progress progress = {
+        .status = MCUBOOT_STATUS_STARTUP,
+        .operation = MCUBOOT_STATUS_PROGRESS_VALIDATE,
+        .current = current,
+        .total = total,
+        .message = "VERIFYING IMAGE",
+    };
+
+    if (hdr != NULL) {
+        progress.version_major = hdr->ih_ver.iv_major;
+        progress.version_minor = hdr->ih_ver.iv_minor;
+        progress.version_revision = hdr->ih_ver.iv_revision;
+        progress.version_build = hdr->ih_ver.iv_build_num;
+    }
+
+    mcuboot_status_progress(&progress);
+}
+
 /*
  * Compute SHA hash over the image.
  * (SHA384 if ECDSA-P384 is being used,
@@ -56,6 +79,9 @@ bootutil_img_hash(struct boot_loader_state *state,
     uint16_t hdr_size;
     uint32_t blk_off;
     uint32_t tlv_off;
+#if !defined(MCUBOOT_HASH_STORAGE_DIRECTLY) && !defined(MCUBOOT_RAM_LOAD)
+    uint32_t next_progress_percent = 5U;
+#endif
 #if !defined(MCUBOOT_HASH_STORAGE_DIRECTLY)
     int rc;
     uint32_t off;
@@ -127,6 +153,8 @@ bootutil_img_hash(struct boot_loader_state *state,
     /* If protected TLVs are present they are also hashed. */
     size += hdr->ih_protect_tlv_size;
 
+    bootutil_img_hash_progress(hdr, 0U, size);
+
 #ifdef MCUBOOT_HASH_STORAGE_DIRECTLY
     /* No chunk loading, storage is mapped to address space and can
      * be directly given to hashing function.
@@ -137,11 +165,13 @@ bootutil_img_hash(struct boot_loader_state *state,
     }
 
     bootutil_sha_update(&sha_ctx, (void *)(base + flash_area_get_off(fap)), size);
+    bootutil_img_hash_progress(hdr, size, size);
 #else /* MCUBOOT_HASH_STORAGE_DIRECTLY */
 #ifdef MCUBOOT_RAM_LOAD
     bootutil_sha_update(&sha_ctx,
                         (void*)(IMAGE_RAM_BASE + hdr->ih_load_addr),
                         size);
+    bootutil_img_hash_progress(hdr, size, size);
 #else
     for (off = 0; off < size; off += blk_sz) {
         blk_sz = size - off;
@@ -187,6 +217,12 @@ bootutil_img_hash(struct boot_loader_state *state,
         }
 #endif
         bootutil_sha_update(&sha_ctx, tmp_buf, blk_sz);
+
+        if ((off + blk_sz) >= size ||
+            (((off + blk_sz) * 100U) / size) >= next_progress_percent) {
+            bootutil_img_hash_progress(hdr, off + blk_sz, size);
+            next_progress_percent = (((off + blk_sz) * 100U) / size) + 5U;
+        }
     }
 #endif /* MCUBOOT_RAM_LOAD */
 #endif /* MCUBOOT_HASH_STORAGE_DIRECTLY */

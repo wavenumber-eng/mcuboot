@@ -26,6 +26,7 @@ typedef enum
 typedef enum
 {
 	MCUBOOT_STATUS_PROGRESS_PREPARE = 0,
+	MCUBOOT_STATUS_PROGRESS_VALIDATE,
 	MCUBOOT_STATUS_PROGRESS_SWAP,
 	MCUBOOT_STATUS_PROGRESS_DONE,
 } mcuboot_status_progress_operation_t;
@@ -37,6 +38,10 @@ struct mcuboot_status_progress {
 	uint8_t reserved[3];
 	uint32_t current;
 	uint32_t total;
+	uint8_t version_major;
+	uint8_t version_minor;
+	uint16_t version_revision;
+	uint32_t version_build;
 	const char *message;
 };
 
