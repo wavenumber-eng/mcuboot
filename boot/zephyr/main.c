@@ -202,6 +202,8 @@ static void do_boot(struct boot_rsp *rsp)
 
 #if CONFIG_CPU_HAS_ARM_MPU || CONFIG_CPU_HAS_NXP_SYSMPU
     z_arm_clear_arm_mpu_config();
+#elif defined(CONFIG_ARM_AARCH32_MMU)
+    z_arm_clear_arm_mmu_config();
 #endif
 
 #if defined(CONFIG_BUILTIN_STACK_GUARD) && \
