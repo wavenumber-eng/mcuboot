@@ -29,6 +29,19 @@ extern void z_soc_irq_eoi(unsigned int irq);
 #include <zephyr/drivers/interrupt_controller/gic.h>
 #endif
 
+/*
+ * BOOT_DISABLE_CACHES calls sys_cache_data_flush_all() and
+ * sys_cache_data_disable(), and without CONFIG_CACHE_MANAGEMENT both compile
+ * to nothing. On a RAM-load target that is silently fatal: the image the
+ * loader copied stays in the data cache, the application is fetched from a
+ * DDR that never received it, and the handoff succeeds or fails depending on
+ * whether the lines were evicted. It presents as an intermittent boot, which
+ * is the hardest kind of failure to attribute to a missing Kconfig.
+ */
+#if defined(CONFIG_BOOT_DISABLE_CACHES) && !defined(CONFIG_CACHE_MANAGEMENT)
+#error "BOOT_DISABLE_CACHES needs CACHE_MANAGEMENT; without it the cache operations do nothing"
+#endif
+
 #define WRITE_CP15(value, coproc, opc1, crn, crm, opc2)                        \
 	__asm__ volatile("mcr " #coproc ", " #opc1 ", %0, " #crn ", " #crm ", " \
 			 #opc2 "\n" ::"r"(value) :"memory")
