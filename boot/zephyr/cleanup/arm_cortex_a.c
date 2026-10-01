@@ -22,6 +22,8 @@
 #include <zephyr/sys/barrier.h>
 #include <zephyr/sys/util_macro.h>
 #include <zephyr/toolchain.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/sys/sys_io.h>
 
 #ifdef CONFIG_ARM_CUSTOM_INTERRUPT_CONTROLLER
 extern void z_soc_irq_eoi(unsigned int irq);
@@ -55,6 +57,8 @@ extern void z_soc_irq_eoi(unsigned int irq);
 #define SCTLR_C BIT(2)  /* data cache */
 #define SCTLR_I BIT(12) /* instruction cache */
 #define SCTLR_Z BIT(11) /* branch prediction */
+#define SCTLR_TRE BIT(28) /* TEX remap */
+#define SCTLR_AFE BIT(29) /* access flag */
 
 void cleanup_arm_interrupts(void)
 {
@@ -73,12 +77,63 @@ void cleanup_arm_interrupts(void)
 		arm_gic_eoi(i);
 #endif /* CONFIG_ARM_CUSTOM_INTERRUPT_CONTROLLER */
 	}
+
+#if defined(CONFIG_GIC) && !defined(CONFIG_ARM_CUSTOM_INTERRUPT_CONTROLLER)
+	/*
+	 * Switch the controller itself off, not only the interrupts in it.
+	 *
+	 * Disabling and acknowledging each interrupt leaves the distributor and
+	 * the CPU interface enabled, so the application starts with a live
+	 * controller it has not configured. Measured on a Zynq-7000 against the
+	 * state the first-stage loader leaves: the distributor read 0x1 and the
+	 * CPU interface 0x3 where the reference had both at zero, with the
+	 * priority mask open at 0xF0.
+	 *
+	 * Nothing was enabled behind them in that measurement, so nothing fired,
+	 * but an application that enables one interrupt then inherits a
+	 * controller already willing to deliver it.
+	 */
+	sys_write32(0U, GICC_CTLR);
+	sys_write32(0U, GICD_CTLR);
+	/* And the priority mask, which decides what the interface would deliver
+	 * if anything turned it back on. Left at 0xF0 it is inert only for as
+	 * long as the interface stays off.
+	 */
+	sys_write32(0U, GICC_PMR);
+	barrier_dsync_fence_full();
+#endif
+
+#if DT_HAS_COMPAT_STATUS_OKAY(arm_armv8_timer) && DT_NODE_HAS_PROP(DT_INST(0, arm_armv8_timer), reg)
+	/*
+	 * Stop the timer from being able to interrupt.
+	 *
+	 * This timer is in the Cortex-A9 private memory region beside the
+	 * interrupt controller, and the kernel leaves its comparator and its
+	 * interrupt enable set because that is how it keeps time. Measured
+	 * against the first-stage loader: the control register read 0x7 where
+	 * the reference had 0x1, so the loader hands over a timer armed to fire
+	 * rather than one merely counting.
+	 *
+	 * It did not fire in that measurement, because the timer's private
+	 * interrupt was still disabled in the distributor. An application that
+	 * enables that one interrupt would inherit a comparator already set.
+	 *
+	 * The proper home for this is sys_clock_disable(), which MCUboot already
+	 * calls and which this timer driver does not implement: without
+	 * CONFIG_SYSTEM_TIMER_HAS_DISABLE_SUPPORT that call compiles to nothing.
+	 * Implementing it in the driver would fix every user of it rather than
+	 * this one.
+	 */
+	sys_write32(0U, DT_REG_ADDR(DT_INST(0, arm_armv8_timer)) + 0x08U);
+	barrier_dsync_fence_full();
+#endif
 }
 
 #if defined(CONFIG_ARM_AARCH32_MMU)
 __weak void z_arm_clear_arm_mmu_config(void)
 {
 	uint32_t sctlr;
+
 
 	/*
 	 * Runs after the caches have been cleaned and disabled, so the image
@@ -97,7 +152,7 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	barrier_isync_fence_full();
 
 	READ_CP15(sctlr, p15, 0, c1, c0, 0);
-	sctlr &= ~(SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_Z);
+	sctlr &= ~(SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_Z | SCTLR_AFE | SCTLR_TRE);
 	barrier_dsync_fence_full();
 	WRITE_CP15(sctlr, p15, 0, c1, c0, 0);
 	barrier_isync_fence_full();
@@ -108,6 +163,26 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	 * stop being the ones in use.
 	 */
 	WRITE_CP15(0, p15, 0, c8, c7, 0); /* invalidate the entire unified TLB */
+	barrier_dsync_fence_full();
+	barrier_isync_fence_full();
+
+	/*
+	 * Only now the translation tables and the domain permissions that
+	 * described this boot loader. They are inert with the unit off and live
+	 * the moment anything turns it on, so leaving them hands the application
+	 * a mapping it did not choose: measured against the first-stage loader,
+	 * TTBR0 held 0x0091004A where the reference had 0x0000C05B and DACR
+	 * 0x55555555 against 0xFFFFFFFF.
+	 *
+	 * After the unit is off, not before. Clearing TTBR0 while translation is
+	 * still enabled makes the next instruction fetch walk a null table, and
+	 * the handoff dies between the branch and the application's first line.
+	 * That is what the first attempt at this did.
+	 */
+	WRITE_CP15(0, p15, 0, c2, c0, 0); /* TTBR0 */
+	WRITE_CP15(0, p15, 0, c2, c0, 1); /* TTBR1 */
+	WRITE_CP15(0, p15, 0, c2, c0, 2); /* TTBCR */
+	WRITE_CP15(0, p15, 0, c3, c0, 0); /* DACR */
 	barrier_dsync_fence_full();
 	barrier_isync_fence_full();
 }
