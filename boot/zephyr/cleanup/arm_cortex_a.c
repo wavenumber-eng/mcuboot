@@ -56,7 +56,6 @@ extern void z_soc_irq_eoi(unsigned int irq);
 #define SCTLR_M BIT(0)  /* MMU */
 #define SCTLR_C BIT(2)  /* data cache */
 #define SCTLR_I BIT(12) /* instruction cache */
-#define SCTLR_Z BIT(11) /* branch prediction */
 #define SCTLR_TRE BIT(28) /* TEX remap */
 #define SCTLR_AFE BIT(29) /* access flag */
 
@@ -145,6 +144,15 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	 * translation tables are not valid under the ones the application
 	 * installs, and arch_icache_disable() clears the enable bit without
 	 * invalidating anything.
+	 *
+	 * Invalidated, and for the branch predictor that is all. Clearing its
+	 * enable bit as well was measured to cost the application 29 per cent of
+	 * its flash read throughput, because Zephyr's AArch32 start-up does not
+	 * set that bit and nothing else does either: the same image read 3 MiB in
+	 * 1,338 ms chain-loaded and 956 ms when it was not, and the only register
+	 * that differed afterwards was SCTLR, by bit 11 alone. An invalidated
+	 * predictor holds nothing from this loader, so disabling it buys no
+	 * isolation and hands the next image a slower machine.
 	 */
 	WRITE_CP15(0, p15, 0, c7, c5, 0); /* invalidate the instruction cache */
 	WRITE_CP15(0, p15, 0, c7, c5, 6); /* invalidate the branch predictor */
@@ -152,7 +160,7 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	barrier_isync_fence_full();
 
 	READ_CP15(sctlr, p15, 0, c1, c0, 0);
-	sctlr &= ~(SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_Z | SCTLR_AFE | SCTLR_TRE);
+	sctlr &= ~(SCTLR_M | SCTLR_C | SCTLR_I | SCTLR_AFE | SCTLR_TRE);
 	barrier_dsync_fence_full();
 	WRITE_CP15(sctlr, p15, 0, c1, c0, 0);
 	barrier_isync_fence_full();
