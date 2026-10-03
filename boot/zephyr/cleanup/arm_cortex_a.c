@@ -170,6 +170,18 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	 * switched off, so nothing can refill it from tables that are about to
 	 * stop being the ones in use.
 	 */
+	/*
+	 * The monitor vector base describes this loader as much as the
+	 * translation tables do, and nothing else writes it: its reset value is
+	 * architecturally UNKNOWN, so an image that is chain-loaded inherits
+	 * whatever happened to be there. Measured on a Zynq-7000: booted by the
+	 * first-stage loader the application reads 0x00000000 on six of six
+	 * boots, and chain-loaded it reads 0x00000000, 0x04000000 or 0x10000000
+	 * depending on the boot. Writing it makes the handoff deterministic and
+	 * matches what the first-stage loader leaves.
+	 */
+	WRITE_CP15(0, p15, 0, c12, c0, 1); /* MVBAR */
+
 	WRITE_CP15(0, p15, 0, c8, c7, 0); /* invalidate the entire unified TLB */
 	barrier_dsync_fence_full();
 	barrier_isync_fence_full();
