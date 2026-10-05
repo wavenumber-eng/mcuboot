@@ -250,8 +250,9 @@ static void do_boot(struct boot_rsp *rsp)
      * Leave the masks as a first-stage loader leaves them, which is what a
      * chain-loaded image expects, rather than as the Cortex-R5 TRM recommends.
      *
-     * A is cleared: an image that starts with asynchronous aborts masked cannot
-     * see one the handoff caused.
+     * A arrives set, because Zephyr starts every thread, this loader's main()
+     * included, with A_BIT in the initial frame. It is cleared: an image that
+     * starts with asynchronous aborts masked cannot see one the handoff caused.
      *
      * F is not written. Where SCTLR.NMFI is tied high, as on Zynq-7000
      * (UG585 Table 3-10), FIQ is non-maskable by software: F can be cleared but
