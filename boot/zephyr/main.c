@@ -296,28 +296,39 @@ static void do_boot(struct boot_rsp *rsp)
     __set_CONTROL(0x00); /* application will configures core on its own */
     __ISB();
 #else
-    /* Set mode to supervisor and A, I and F bit as described in the
-     * Cortex R5 TRM */
+    /*
+     * Hand over the processor as the first-stage loader does, which is what the
+     * handoff contract asks for, not as the Cortex-R5 TRM recommends.
+     *
+     * Measured on a Zynq-7000 with one application binary booted both ways:
+     *
+     *   first-stage loader direct   CPSR 0x600000DF   F=1  A=0
+     *   chain-loaded through here   CPSR 0x6000019F   F=0  A=1
+     *
+     * A is cleared here to match. The first-stage loader clears it too, in the
+     * standalone BSP's boot.S, and an application that starts with asynchronous
+     * aborts masked cannot see one that the handoff caused.
+     *
+     * F is not set, because on this part it cannot be. SCTLR.NMFI is tied to 1
+     * by the CFGNMFI pin (UG585 Table 3-10), which makes FIQ non-maskable by
+     * software: F can be cleared but never set again. Zephyr clears it when it
+     * dispatches this loader's first thread, long before here, so the bit is
+     * already gone. Writing it was a no-op that read as intent.
+     *
+     * CPSR_fsxc rather than the bare CPSR: `msr CPSR` assembles to CPSR_fc,
+     * flags and control, and A is bit 8 in the extension byte.
+     */
     __asm__ volatile(
         "   mrs r0, CPSR\n"
-        /* change mode bits to supervisor */
+        /* supervisor mode */
         "   bic r0, #0x1f\n"
         "   orr r0, #0x13\n"
-        /* set the A, I and F bit */
-        "   mov r1, #0b111\n"
-        "   lsl r1, #0x6\n"
-        "   orr r0, r1\n"
-
-        /*
-         * CPSR_fsxc, not the bare CPSR. `msr CPSR` assembles to CPSR_fc, which
-         * writes the flags and control bytes only, and the A bit is bit 8, in the
-         * extension byte. So the comment above was never true of A: it is left
-         * at whatever this loader was running with. Measured on a Zynq-7000, an
-         * application chain-loaded here saw A set and the first-stage loader
-         * leaves it clear.
-         */
+        /* mask IRQ */
+        "   orr r0, #0x80\n"
+        /* leave asynchronous aborts unmasked, as the first-stage loader does */
+        "   bic r0, #0x100\n"
         "   msr CPSR_fsxc, r0\n"
-        ::: "r0", "r1");
+        ::: "r0");
     PROBE_CPSR(5);
 #endif /* CONFIG_CPU_CORTEX_M */
 
