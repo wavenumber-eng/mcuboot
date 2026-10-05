@@ -247,28 +247,19 @@ static void do_boot(struct boot_rsp *rsp)
     __ISB();
 #else
     /*
-     * Hand over the processor as the first-stage loader does, which is what the
-     * handoff contract asks for, not as the Cortex-R5 TRM recommends.
+     * Leave the masks as a first-stage loader leaves them, which is what a
+     * chain-loaded image expects, rather than as the Cortex-R5 TRM recommends.
      *
-     * Measured on a Zynq-7000 with one application binary booted both ways:
+     * A is cleared: an image that starts with asynchronous aborts masked cannot
+     * see one the handoff caused.
      *
-     *   first-stage loader direct   CPSR 0x600000DF   F=1  A=0
-     *   chain-loaded through here   CPSR 0x6000019F   F=0  A=1
+     * F is not written. Where SCTLR.NMFI is tied high, as on Zynq-7000
+     * (UG585 Table 3-10), FIQ is non-maskable by software: F can be cleared but
+     * never set, and Zephyr clears it dispatching this loader's first thread.
      *
-     * A is cleared here to match. The first-stage loader clears it too, in the
-     * standalone BSP's boot.S, and an application that starts with asynchronous
-     * aborts masked cannot see one that the handoff caused.
-     *
-     * F is not set, because on this part it cannot be. SCTLR.NMFI is tied to 1
-     * by the CFGNMFI pin (UG585 Table 3-10), which makes FIQ non-maskable by
-     * software: F can be cleared but never set again. Zephyr clears it when it
-     * dispatches this loader's first thread, long before here, so the bit is
-     * already gone. Writing it was a no-op that read as intent.
-     *
-     * CPSR_fsxc rather than the bare CPSR: `msr CPSR` assembles to CPSR_fc,
-     * flags and control, and A is bit 8 in the extension byte.
+     * CPSR_fsxc, not the bare CPSR: `msr CPSR` assembles to CPSR_fc and A is
+     * bit 8, in the extension byte.
      */
-    __asm__ volatile(
         "   mrs r0, CPSR\n"
         /* supervisor mode */
         "   bic r0, #0x1f\n"

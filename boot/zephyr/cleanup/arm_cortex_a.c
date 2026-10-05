@@ -145,14 +145,11 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	 * installs, and arch_icache_disable() clears the enable bit without
 	 * invalidating anything.
 	 *
-	 * Invalidated, and for the branch predictor that is all. Clearing its
-	 * enable bit as well was measured to cost the application 29 per cent of
-	 * its flash read throughput, because Zephyr's AArch32 start-up does not
-	 * set that bit and nothing else does either: the same image read 3 MiB in
-	 * 1,338 ms chain-loaded and 956 ms when it was not, and the only register
-	 * that differed afterwards was SCTLR, by bit 11 alone. An invalidated
-	 * predictor holds nothing from this loader, so disabling it buys no
-	 * isolation and hands the next image a slower machine.
+	 * Invalidated, and for the branch predictor that is all. Clearing its enable
+	 * bit as well costs the next image its branch prediction, because Zephyr's
+	 * AArch32 start-up does not set that bit and nothing else does: measured at
+	 * 29 per cent of flash read throughput on a Zynq-7000. An invalidated
+	 * predictor holds nothing from this loader, so disabling it buys no isolation.
 	 */
 	WRITE_CP15(0, p15, 0, c7, c5, 0); /* invalidate the instruction cache */
 	WRITE_CP15(0, p15, 0, c7, c5, 6); /* invalidate the branch predictor */
@@ -171,14 +168,9 @@ __weak void z_arm_clear_arm_mmu_config(void)
 	 * stop being the ones in use.
 	 */
 	/*
-	 * The monitor vector base describes this loader as much as the
-	 * translation tables do, and nothing else writes it: its reset value is
-	 * architecturally UNKNOWN, so an image that is chain-loaded inherits
-	 * whatever happened to be there. Measured on a Zynq-7000: booted by the
-	 * first-stage loader the application reads 0x00000000 on six of six
-	 * boots, and chain-loaded it reads 0x00000000, 0x04000000 or 0x10000000
-	 * depending on the boot. Writing it makes the handoff deterministic and
-	 * matches what the first-stage loader leaves.
+	 * The monitor vector base describes this loader as much as the translation
+	 * tables do, and nothing else writes it: its reset value is architecturally
+	 * UNKNOWN, so a chain-loaded image otherwise inherits whatever was there.
 	 */
 	WRITE_CP15(0, p15, 0, c12, c0, 1); /* MVBAR */
 
