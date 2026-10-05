@@ -260,6 +260,7 @@ static void do_boot(struct boot_rsp *rsp)
      * CPSR_fsxc, not the bare CPSR: `msr CPSR` assembles to CPSR_fc and A is
      * bit 8, in the extension byte.
      */
+    __asm__ volatile(
         "   mrs r0, CPSR\n"
         /* supervisor mode */
         "   bic r0, #0x1f\n"
