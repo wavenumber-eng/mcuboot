@@ -150,51 +150,6 @@ struct arm_vector_table {
 #endif
 };
 
-#if defined(CONFIG_CPU_AARCH32_CORTEX_A) && defined(MCUBOOT_PROBE_CPSR)
-/*
- * Where CPSR changes during the handoff, for the Speedy handoff contract.
- *
- * The first-stage loader leaves CPSR 0x600000DF, F set and A clear. Chain-loaded,
- * the application sees 0x6000019F, F clear and A set, on an identical binary.
- * Three explanations for the F bit were offered and none held, so this samples the
- * register at each step instead of reasoning about it.
- *
- * Written to memory rather than logged. Logging it hung the loader in
- * uart_xlnx_ps_poll_out: the console is not dependable this late, and it is not
- * dependable at all when this loader has been placed by a debugger over a running
- * application. A debugger reads these words afterwards and the handoff is not
- * disturbed by the act of observing it.
- *
- * The buffer is a static array rather than a fixed address. A debugger reading
- * memory goes through the processor, so with the unit on it can only reach what
- * this loader maps, and a bare address above the image is not mapped: J-Link
- * answered "Could not read memory". A symbol in .bss always is.
- *
- * Temporary, and off unless MCUBOOT_PROBE_CPSR is defined.
- */
-#define PROBE_MAGIC  0x50524F42U /* "PROB" */
-#define PROBE_SLOTS  8U
-
-/* Read by a debugger from the symbol, after the handoff. */
-volatile uint32_t mcuboot_probe_cpsr[2U + PROBE_SLOTS];
-
-static void probe_cpsr(unsigned int slot)
-{
-	uint32_t cpsr;
-
-	__asm__ volatile("mrs %0, cpsr" : "=r"(cpsr));
-	mcuboot_probe_cpsr[0] = PROBE_MAGIC;
-	mcuboot_probe_cpsr[1] = slot + 1U;   /* how many samples have been taken */
-	if (slot < PROBE_SLOTS) {
-		mcuboot_probe_cpsr[2U + slot] = cpsr;
-	}
-	__asm__ volatile("dsb" ::: "memory");
-}
-#define PROBE_CPSR(slot) probe_cpsr(slot)
-#else
-#define PROBE_CPSR(slot) ((void)0)
-#endif
-
 
 static void do_boot(struct boot_rsp *rsp)
 {
@@ -227,12 +182,10 @@ static void do_boot(struct boot_rsp *rsp)
                                      rsp->br_hdr->ih_hdr_size);
 #endif
 
-    PROBE_CPSR(0);
 
     if (IS_ENABLED(CONFIG_SYSTEM_TIMER_HAS_DISABLE_SUPPORT)) {
         sys_clock_disable();
     }
-    PROBE_CPSR(1);
 
 #ifdef CONFIG_USB_DEVICE_STACK
     /* Disable the USB to prevent it from firing interrupts */
@@ -240,7 +193,6 @@ static void do_boot(struct boot_rsp *rsp)
 #endif
 #if CONFIG_MCUBOOT_CLEANUP_ARM_CORE
     cleanup_arm_interrupts(); /* Disable and acknowledge all interrupts */
-    PROBE_CPSR(2);
 
 #if defined(CONFIG_BOOT_DISABLE_CACHES)
     /* Flush and disable instruction/data caches before chain-loading the application */
@@ -248,14 +200,12 @@ static void do_boot(struct boot_rsp *rsp)
     (void)sys_cache_data_flush_all();
     sys_cache_instr_disable();
     sys_cache_data_disable();
-    PROBE_CPSR(3);
 #endif
 
 #if CONFIG_CPU_HAS_ARM_MPU || CONFIG_CPU_HAS_NXP_SYSMPU
     z_arm_clear_arm_mpu_config();
 #elif defined(CONFIG_ARM_AARCH32_MMU)
     z_arm_clear_arm_mmu_config();
-    PROBE_CPSR(4);
 #endif
 
 #if defined(CONFIG_BUILTIN_STACK_GUARD) && \
@@ -329,7 +279,6 @@ static void do_boot(struct boot_rsp *rsp)
         "   bic r0, #0x100\n"
         "   msr CPSR_fsxc, r0\n"
         ::: "r0");
-    PROBE_CPSR(5);
 #endif /* CONFIG_CPU_CORTEX_M */
 
 #endif
